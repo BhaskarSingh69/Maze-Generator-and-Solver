@@ -1,15 +1,9 @@
-// maze_mvp.cpp - MAZE GENERATOR AND SOLVER, version 1 (First Cut / MVP)
-//
-// What it does (and nothing more):
-//   1. Builds a random maze          (Depth-First Search "digging")
-//   2. Solves it                     (Breadth-First Search, shortest route)
+// maze_mvp.cpp - MAZE GENERATOR AND  
+// SOLVER, version 1 (First Cut / MVP)
+// What it does
+//   1. Builds a random maze   
+//   2. Solves it                    
 //   3. Prints the maze and the route
-//
-// Maze picture:  '#' = wall   ' ' = path   'S' = start   'E' = exit   '*' = route
-//
-// Build:  g++ -std=c++11 -o maze_mvp maze_mvp.cpp
-// Run:    ./maze_mvp            (random maze every time)
-//         ./maze_mvp 42         (same number = same maze)
 
 #include <algorithm>
 #include <cstdlib>
@@ -21,53 +15,40 @@
 #include <vector>
 using namespace std;
 
-const int ROWS = 21;   // must be ODD numbers so walls and paths alternate
+const int ROWS = 21;  
 const int COLS = 41;
 
-vector<string> grid;   // the whole maze: one character per square
+vector<string> grid;   
 
-// The 4 directions: up, down, left, right
+// The 4 directions: up, down, left,right
 const int dr[4] = {-1, 1, 0, 0};
 const int dc[4] = {0, 0, -1, 1};
 
-// ---------------------------------------------------------------
-// STEP 1: GENERATE - dig tunnels with DFS
-// Start in a room. Jump 2 squares to a random room we have not
-// dug yet, knock down the wall in between, and repeat from there.
-// When stuck, the function returns, which walks us back (backtrack).
-// ---------------------------------------------------------------
 void carve(int r, int c) {
     grid[r][c] = ' ';
 
     int order[4] = {0, 1, 2, 3};
-    for (int i = 3; i > 0; i--) {              // shuffle: try the directions in random order
+    for (int i = 3; i > 0; i--) {            
         int j = rand() % (i + 1);
         swap(order[i], order[j]);
     }
 
     for (int i = 0; i < 4; i++) {
         int d = order[i];
-        int nr = r + dr[d] * 2;                // the room 2 squares away
+        int nr = r + dr[d] * 2;                
         int nc = c + dc[d] * 2;
 
         bool inside = nr > 0 && nr < ROWS - 1 && nc > 0 && nc < COLS - 1;
-        if (inside && grid[nr][nc] == '#') {   // not dug yet?
-            grid[r + dr[d]][c + dc[d]] = ' ';  // knock down the wall between
-            carve(nr, nc);                     // move on and keep digging
+        if (inside && grid[nr][nc] == '#') {
+            grid[r + dr[d]][c + dc[d]] = ' '; 
+            carve(nr, nc);                    
         }
     }
 }
 
-// ---------------------------------------------------------------
-// STEP 2: SOLVE - BFS
-// Spread out from the start one step at a time, like ripples in a
-// pond. Remember where each square came from so that, once we reach
-// the exit, we can walk backwards to the start and mark the route.
-// ---------------------------------------------------------------
 bool solve() {
-    int sr = 1, sc = 1;                        // start: top-left room
-    int er = ROWS - 2, ec = COLS - 2;          // exit : bottom-right room
-
+    int sr = 1, sc = 1;                         top-left room
+    int er = ROWS - 2, ec = COLS - 2;         
     vector<vector<pair<int, int> > > from(ROWS, vector<pair<int, int> >(COLS, make_pair(-1, -1)));
     vector<vector<bool> > seen(ROWS, vector<bool>(COLS, false));
 
@@ -80,8 +61,7 @@ bool solve() {
         int c = q.front().second;
         q.pop();
 
-        if (r == er && c == ec) {              // reached the exit!
-            // walk backwards using 'from' and draw the route
+        if (r == er && c == ec) {            
             while (!(r == sr && c == sc)) {
                 grid[r][c] = '*';
                 pair<int, int> p = from[r][c];
@@ -101,12 +81,9 @@ bool solve() {
             }
         }
     }
-    return false;                              // no route (cannot happen in this maze)
+    return false;                             
 }
 
-// ---------------------------------------------------------------
-// STEP 3: PRINT
-// ---------------------------------------------------------------
 void printMaze() {
     for (int r = 0; r < ROWS; r++) cout << grid[r] << "\n";
 }
@@ -115,17 +92,17 @@ int main(int argc, char* argv[]) {
     unsigned seed = (argc > 1) ? (unsigned)atoi(argv[1]) : (unsigned)time(0);
     srand(seed);
 
-    grid.assign(ROWS, string(COLS, '#'));      // start with a solid block of wall
+    grid.assign(ROWS, string(COLS, '#'));      
 
-    carve(1, 1);                               // 1. generate
+    carve(1, 1);                              
     cout << "Maze (seed " << seed << ")\n";
     printMaze();
 
-    if (solve()) {                             // 2. solve
+    if (solve()) {                            
         grid[1][1] = 'S';
         grid[ROWS - 2][COLS - 2] = 'E';
         cout << "\nSolved (route = *)\n";
-        printMaze();                           // 3. print
+        printMaze();                          
     } else {
         cout << "No route found.\n";
     }
