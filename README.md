@@ -1,8 +1,11 @@
 # Maze-Generator-and-Solver
 
 Team ID: 15
+
 Team Members:
+
 Singh Bhaskar Ajitpal
+
 Rai Saumeyakumari Arvind
 
 # Description 
