@@ -1,0 +1,275 @@
+// maze_v2.cpp - MAZE GENERATOR AND SOLVER, version 2
+//
+// What is new compared with version 1:
+//   * The code is organised into a Maze class (version 1 used loose functions)
+//   * You choose the maze size (rows and columns) - input is checked, so
+//     wrong input can never crash the program
+//   * Own random generator with a seed: same seed = same maze
+//   * Maze generation is iterative (uses our own stack), so a big maze can
+//     never overflow the program stack (version 1 used recursion)
+//   * The solver now reports statistics: route length and cells explored
+//   * You can make another maze without restarting the program
+//
+// Coming next:
+//   Version 3 -> a second solver (DFS), a menu and a BFS-vs-DFS comparison
+//   Final     -> loops in the maze, live animation, save to file, split into files
+//
+// Maze picture:  '#' = wall   ' ' = path   'S' = start   'E' = exit   '*' = route
+//
+// Build:  g++ -std=c++11 -O2 -Wall -Wextra -o maze_v2 maze_v2.cpp
+// Run:    ./maze_v2
+
+#include <algorithm>
+#include <ctime>
+#include <iostream>
+#include <queue>
+#include <random>
+#include <string>
+#include <vector>
+
+// A position of one CELL (room) in the maze: row and column
+struct Pos {
+    int row;
+    int col;
+};
+
+// Everything the solver reports back
+struct SolveResult {
+    bool found;            // did we reach the exit?
+    int explored;          // how many cells the solver discovered while searching
+    std::vector<Pos> path; // the route from start to exit (empty if not found)
+};
+
+// The 4 directions: 0 = up, 1 = right, 2 = down, 3 = left
+static const int DR[4] = {-1, 0, 1, 0};
+static const int DC[4] = {0, 1, 0, -1};
+
+class Maze {
+public:
+    Maze(int rows, int cols);
+
+    // Build a random maze. Same seed => same maze.
+    void generate(unsigned seed);
+
+    // Find the shortest route from the top-left to the bottom-right cell.
+    SolveResult solveBFS() const;
+
+    // Print the maze. If a result is given, the route is drawn with '*'.
+    void print(const SolveResult* result = nullptr) const;
+
+    int rows() const { return rows_; }
+    int cols() const { return cols_; }
+
+private:
+    int rows_;
+    int cols_;
+
+    // The maze is stored as a block of characters of size (2*rows+1) x (2*cols+1).
+    // Cell (r, c) lives at grid_[2r+1][2c+1]. The squares between two cells
+    // hold either a wall '#' or an open passage ' '.
+    std::vector<std::string> grid_;
+
+    bool insideCells(int r, int c) const { return r >= 0 && r < rows_ && c >= 0 && c < cols_; }
+    bool passageOpen(int r, int c, int dir) const;  // is there NO wall on that side of cell (r, c)?
+    void openPassage(int r, int c, int dir);        // knock down that wall
+};
+
+Maze::Maze(int rows, int cols) : rows_(rows), cols_(cols) {
+    // Start as a solid block of wall
+    grid_.assign(2 * rows_ + 1, std::string(2 * cols_ + 1, '#'));
+    for (int r = 0; r < rows_; r++)
+        for (int c = 0; c < cols_; c++) grid_[2 * r + 1][2 * c + 1] = ' ';
+}
+
+bool Maze::passageOpen(int r, int c, int dir) const {
+    return grid_[2 * r + 1 + DR[dir]][2 * c + 1 + DC[dir]] == ' ';
+}
+
+void Maze::openPassage(int r, int c, int dir) {
+    grid_[2 * r + 1 + DR[dir]][2 * c + 1 + DC[dir]] = ' ';
+}
+
+// ---------------------------------------------------------------
+// GENERATE - DFS with backtracking (the "mole digging tunnels" idea)
+// ---------------------------------------------------------------
+void Maze::generate(unsigned seed) {
+    // Start again with every passage closed
+    for (int r = 0; r < 2 * rows_ + 1; r++)
+        for (int c = 0; c < 2 * cols_ + 1; c++)
+            grid_[r][c] = (r % 2 == 1 && c % 2 == 1) ? ' ' : '#';
+
+    std::mt19937 rng(seed);
+    std::vector<std::vector<bool> > visited(rows_, std::vector<bool>(cols_, false));
+    std::vector<Pos> trail;  // the breadcrumb trail (works like a stack)
+
+    Pos start = {0, 0};
+    visited[0][0] = true;
+    trail.push_back(start);
+
+    while (!trail.empty()) {
+        Pos cur = trail.back();
+
+        // Which neighbouring cells have we NOT visited yet?
+        std::vector<int> options;
+        for (int d = 0; d < 4; d++) {
+            int nr = cur.row + DR[d];
+            int nc = cur.col + DC[d];
+            if (insideCells(nr, nc) && !visited[nr][nc]) options.push_back(d);
+        }
+
+        if (options.empty()) {
+            trail.pop_back();  // dead end: step back along the trail
+        } else {
+            int d = options[rng() % options.size()];
+            openPassage(cur.row, cur.col, d);  // dig a tunnel
+            Pos next = {cur.row + DR[d], cur.col + DC[d]};
+            visited[next.row][next.col] = true;
+            trail.push_back(next);
+        }
+    }
+}
+
+// ---------------------------------------------------------------
+// SOLVE - BFS (spreads out like ripples, so it finds the shortest route)
+// ---------------------------------------------------------------
+SolveResult Maze::solveBFS() const {
+    SolveResult result;
+    result.found = false;
+    result.explored = 0;
+
+    Pos goal = {rows_ - 1, cols_ - 1};
+
+    // parent[r][c] = the cell we came from (row -1 means "none yet")
+    std::vector<std::vector<Pos> > parent(rows_, std::vector<Pos>(cols_, Pos{-1, -1}));
+    std::vector<std::vector<bool> > seen(rows_, std::vector<bool>(cols_, false));
+
+    std::queue<Pos> waiting;
+    Pos start = {0, 0};
+    waiting.push(start);
+    seen[0][0] = true;
+    result.explored = 1;  // the start cell counts as explored
+
+    while (!waiting.empty()) {
+        Pos cur = waiting.front();
+        waiting.pop();
+
+        if (cur.row == goal.row && cur.col == goal.col) {
+            result.found = true;
+            break;
+        }
+
+        for (int d = 0; d < 4; d++) {
+            if (!passageOpen(cur.row, cur.col, d)) continue;
+            int nr = cur.row + DR[d];
+            int nc = cur.col + DC[d];
+            if (!insideCells(nr, nc) || seen[nr][nc]) continue;
+            seen[nr][nc] = true;
+            result.explored++;  // a newly discovered cell
+            parent[nr][nc] = cur;
+            waiting.push(Pos{nr, nc});
+        }
+    }
+
+    // Rebuild the route by walking backwards from the exit to the start
+    if (result.found) {
+        Pos p = goal;
+        while (!(p.row == start.row && p.col == start.col)) {
+            result.path.push_back(p);
+            p = parent[p.row][p.col];
+        }
+        result.path.push_back(start);
+        std::reverse(result.path.begin(), result.path.end());
+    }
+    return result;
+}
+
+// ---------------------------------------------------------------
+// PRINT
+// ---------------------------------------------------------------
+void Maze::print(const SolveResult* result) const {
+    std::vector<std::string> g = grid_;  // draw on a copy
+
+    if (result != nullptr) {
+        for (size_t i = 0; i < result->path.size(); i++) {
+            Pos p = result->path[i];
+            g[2 * p.row + 1][2 * p.col + 1] = '*';
+            if (i > 0) {  // also mark the passage between this cell and the previous one
+                Pos q = result->path[i - 1];
+                g[p.row + q.row + 1][p.col + q.col + 1] = '*';
+            }
+        }
+    }
+    g[1][1] = 'S';
+    g[2 * rows_ - 1][2 * cols_ - 1] = 'E';
+
+    for (size_t i = 0; i < g.size(); i++) std::cout << g[i] << "\n";
+}
+
+// ---------------------------------------------------------------
+// INPUT HELPERS
+// ---------------------------------------------------------------
+
+// Ask for a whole number between lo and hi. Enter alone gives the default.
+// Text, decimals and out-of-range numbers are rejected and asked again.
+// If the input ends (Ctrl+D / closed pipe) the default is returned.
+static int askInt(const std::string& question, int defaultValue, int lo, int hi) {
+    while (true) {
+        std::cout << question << " [" << defaultValue << "]: ";
+        std::string line;
+        if (!std::getline(std::cin, line)) return defaultValue;
+
+        // trim spaces at both ends
+        size_t a = line.find_first_not_of(" \t\r\n");
+        if (a == std::string::npos) return defaultValue;  // empty line
+        size_t b = line.find_last_not_of(" \t\r\n");
+        line = line.substr(a, b - a + 1);
+
+        // only digits allowed (and at most 9 of them, so the number cannot overflow)
+        bool ok = !line.empty() && line.size() <= 9;
+        for (size_t i = 0; i < line.size() && ok; i++)
+            if (line[i] < '0' || line[i] > '9') ok = false;
+
+        if (ok) {
+            int v = std::stoi(line);
+            if (v >= lo && v <= hi) return v;
+        }
+        std::cout << "  Please enter a whole number from " << lo << " to " << hi << ".\n";
+    }
+}
+
+static bool askYesNo(const std::string& question) {
+    std::cout << question << " (y/n) [n]: ";
+    std::string line;
+    if (!std::getline(std::cin, line)) return false;
+    return !line.empty() && (line[0] == 'y' || line[0] == 'Y');
+}
+
+int main() {
+    std::cout << "==== MAZE GENERATOR AND SOLVER (version 2) ====\n\n";
+
+    do {
+        int rows = askInt("Rows    (3-40)", 10, 3, 40);
+        int cols = askInt("Columns (3-80)", 20, 3, 80);
+        int seedIn = askInt("Seed (same number = same maze, 0 = random)", 0, 0, 999999);
+        unsigned seed = (seedIn == 0) ? (unsigned)std::time(nullptr) : (unsigned)seedIn;
+
+        Maze maze(rows, cols);
+        maze.generate(seed);
+
+        std::cout << "\nMaze " << rows << " x " << cols << " (seed " << seed << ")\n";
+        maze.print();
+
+        SolveResult res = maze.solveBFS();
+        if (res.found) {
+            std::cout << "\nSolved with BFS (route = *)\n";
+            maze.print(&res);
+            std::cout << "Route length   : " << res.path.size() << " cells\n";
+            std::cout << "Cells explored : " << res.explored << "\n\n";
+        } else {
+            std::cout << "\nNo route found.\n\n";  // cannot happen in a generated maze
+        }
+    } while (askYesNo("Make another maze?"));
+
+    std::cout << "Bye!\n";
+    return 0;
+}
