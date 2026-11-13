@@ -1,0 +1,455 @@
+#include <algorithm>
+#include <cstdlib>
+#include <ctime>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <queue>
+#include <random>
+#include <sstream>
+#include <string>
+#include <vector>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
+#include <time.h>
+#include <unistd.h>
+#endif
+struct Pos {
+int row;
+int col;
+};
+struct SolveResult {
+bool found;
+std::vector<Pos> explored;
+std::vector<int> parentIdx;
+std::vector<Pos> path;
+};
+static const int DR[4] = {-1, 0, 1, 0};
+static const int DC[4] = {0, 1, 0, -1};
+static std::size_t idx(int v) { return static_cast<std::size_t>(v); }
+class VisitedGrid {
+public:
+VisitedGrid(int rows, int cols) : cols_(cols), flags_(idx(rows) * idx(cols), false) {}
+bool isSet(int r, int c) const { return flags_[idx(r * cols_ + c)]; }
+void set(int r, int c) { flags_[idx(r * cols_ + c)] = true; }
+private:
+int cols_;
+std::vector<bool> flags_;
+};
+class Maze {
+public:
+Maze(int rows, int cols);
+void generate(unsigned seed);
+int addLoops(int count);
+int loopCount() const;
+SolveResult solveBFS() const;
+SolveResult solveDFS() const;
+std::string render(const SolveResult* result = nullptr, int showCount = -1,
+bool useColor = false) const;
+bool saveToFile(const std::string& filename, const SolveResult* result = nullptr) const;
+int rows() const { return rows_; }
+int cols() const { return cols_; }
+private:
+int rows_;
+int cols_;
+std::vector<std::string> grid_;
+std::mt19937 rng_;
+char& at(int gr, int gc) { return grid_[idx(gr)][idx(gc)]; }
+char at(int gr, int gc) const { return grid_[idx(gr)][idx(gc)]; }
+bool insideCells(int r, int c) const { return r >= 0 && r < rows_ && c >= 0 && c < cols_; }
+bool passageOpen(int r, int c, int dir) const;
+void openPassage(int r, int c, int dir);
+void resetGrid();
+int randBelow(int n);
+static void buildPath(SolveResult& res, int goalIdx);
+};
+Maze::Maze(int rows, int cols) : rows_(rows), cols_(cols) { resetGrid(); }
+void Maze::resetGrid() {
+grid_.assign(idx(2 * rows_ + 1), std::string(idx(2 * cols_ + 1), '#'));
+for (int r = 0; r < rows_; r++)
+for (int c = 0; c < cols_; c++) at(2 * r + 1, 2 * c + 1) = ' ';
+}
+int Maze::randBelow(int n) {
+return static_cast<int>(rng_() % static_cast<std::mt19937::result_type>(n));
+}
+bool Maze::passageOpen(int r, int c, int dir) const {
+return at(2 * r + 1 + DR[dir], 2 * c + 1 + DC[dir]) == ' ';
+}
+void Maze::openPassage(int r, int c, int dir) {
+at(2 * r + 1 + DR[dir], 2 * c + 1 + DC[dir]) = ' ';
+}
+void Maze::generate(unsigned seed) {
+rng_.seed(seed);
+resetGrid();
+VisitedGrid visited(rows_, cols_);
+std::vector<Pos> trail;
+Pos start = {0, 0};
+visited.set(0, 0);
+trail.push_back(start);
+while (!trail.empty()) {
+Pos cur = trail.back();
+int options[4];
+int count = 0;
+for (int d = 0; d < 4; d++) {
+int nr = cur.row + DR[d];
+int nc = cur.col + DC[d];
+if (insideCells(nr, nc) && !visited.isSet(nr, nc)) options[count++] = d;
+}
+if (count == 0) {
+trail.pop_back();
+} else {
+int d = options[randBelow(count)];
+openPassage(cur.row, cur.col, d);
+Pos next = {cur.row + DR[d], cur.col + DC[d]};
+visited.set(next.row, next.col);
+trail.push_back(next);
+}
+}
+}
+int Maze::addLoops(int count) {
+int removed = 0;
+long attempts = 0;
+const long maxAttempts = static_cast<long>(count) * 50;
+while (removed < count && attempts < maxAttempts) {
+attempts++;
+int r = randBelow(rows_);
+int c = randBelow(cols_);
+int d = randBelow(4);
+int nr = r + DR[d];
+int nc = c + DC[d];
+if (insideCells(nr, nc) && !passageOpen(r, c, d)) {
+openPassage(r, c, d);
+removed++;
+}
+}
+return removed;
+}
+int Maze::loopCount() const {
+int passages = 0;
+for (int r = 0; r < rows_; r++) {
+for (int c = 0; c < cols_; c++) {
+if (passageOpen(r, c, 1)) passages++;
+if (passageOpen(r, c, 2)) passages++;
+}
+}
+return passages - (rows_ * cols_ - 1);
+}
+void Maze::buildPath(SolveResult& res, int goalIdx) {
+res.path.clear();
+res.found = (goalIdx >= 0);
+if (!res.found) return;
+for (int i = goalIdx; i != -1; i = res.parentIdx[idx(i)]) {
+res.path.push_back(res.explored[idx(i)]);
+}
+std::reverse(res.path.begin(), res.path.end());
+}
+SolveResult Maze::solveBFS() const {
+SolveResult res;
+res.found = false;
+Pos start = {0, 0};
+Pos goal = {rows_ - 1, cols_ - 1};
+VisitedGrid seen(rows_, cols_);
+std::queue<int> waiting;
+res.explored.push_back(start);
+res.parentIdx.push_back(-1);
+seen.set(start.row, start.col);
+waiting.push(0);
+int goalIdx = -1;
+while (!waiting.empty()) {
+int i = waiting.front();
+waiting.pop();
+Pos cur = res.explored[idx(i)];
+if (cur.row == goal.row && cur.col == goal.col) {
+goalIdx = i;
+break;
+}
+for (int d = 0; d < 4; d++) {
+if (!passageOpen(cur.row, cur.col, d)) continue;
+int nr = cur.row + DR[d];
+int nc = cur.col + DC[d];
+if (!insideCells(nr, nc) || seen.isSet(nr, nc)) continue;
+seen.set(nr, nc);
+Pos next = {nr, nc};
+res.explored.push_back(next);
+res.parentIdx.push_back(i);
+waiting.push(static_cast<int>(res.explored.size()) - 1);
+}
+}
+buildPath(res, goalIdx);
+return res;
+}
+SolveResult Maze::solveDFS() const {
+struct Frame {
+int cellIdx;
+int nextDir;
+};
+SolveResult res;
+res.found = false;
+Pos start = {0, 0};
+Pos goal = {rows_ - 1, cols_ - 1};
+VisitedGrid seen(rows_, cols_);
+std::vector<Frame> stack;
+res.explored.push_back(start);
+res.parentIdx.push_back(-1);
+seen.set(start.row, start.col);
+Frame first = {0, 0};
+stack.push_back(first);
+int goalIdx = -1;
+while (!stack.empty()) {
+int cellIdx = stack.back().cellIdx;
+Pos cur = res.explored[idx(cellIdx)];
+if (cur.row == goal.row && cur.col == goal.col) {
+goalIdx = cellIdx;
+break;
+}
+bool moved = false;
+while (!moved && stack.back().nextDir < 4) {
+int d = stack.back().nextDir;
+stack.back().nextDir++;
+if (!passageOpen(cur.row, cur.col, d)) continue;
+int nr = cur.row + DR[d];
+int nc = cur.col + DC[d];
+if (!insideCells(nr, nc) || seen.isSet(nr, nc)) continue;
+seen.set(nr, nc);
+Pos next = {nr, nc};
+res.explored.push_back(next);
+res.parentIdx.push_back(cellIdx);
+Frame f = {static_cast<int>(res.explored.size()) - 1, 0};
+stack.push_back(f);
+moved = true;
+}
+if (!moved) stack.pop_back();
+}
+buildPath(res, goalIdx);
+return res;
+}
+static void putChar(std::vector<std::string>& g, int r, int c, char ch) { g[idx(r)][idx(c)] = ch; }
+std::string Maze::render(const SolveResult* result, int showCount, bool useColor) const {
+std::vector<std::string> g = grid_;
+if (result != nullptr) {
+std::size_t n = result->explored.size();
+bool showAll = (showCount < 0) || (idx(showCount) >= n);
+if (!showAll) n = idx(showCount);
+for (std::size_t i = 0; i < n; i++) {
+Pos p = result->explored[i];
+putChar(g, 2 * p.row + 1, 2 * p.col + 1, '.');
+int par = result->parentIdx[i];
+if (par >= 0) {
+Pos q = result->explored[idx(par)];
+putChar(g, p.row + q.row + 1, p.col + q.col + 1, '.');
+}
+}
+if (showAll) {
+for (std::size_t i = 0; i < result->path.size(); i++) {
+Pos p = result->path[i];
+putChar(g, 2 * p.row + 1, 2 * p.col + 1, '*');
+if (i > 0) {
+Pos q = result->path[i - 1];
+putChar(g, p.row + q.row + 1, p.col + q.col + 1, '*');
+}
+}
+}
+}
+putChar(g, 1, 1, 'S');
+putChar(g, 2 * rows_ - 1, 2 * cols_ - 1, 'E');
+std::ostringstream out;
+for (std::size_t r = 0; r < g.size(); r++) {
+for (std::size_t c = 0; c < g[r].size(); c++) {
+char ch = g[r][c];
+if (useColor && ch == '*') out << "\033[1;32m*\033[0m";
+else if (useColor && ch == '.') out << "\033[33m.\033[0m";
+else if (useColor && (ch == 'S' || ch == 'E')) out << "\033[1;31m" << ch << "\033[0m";
+else out << ch;
+}
+out << "\n";
+}
+return out.str();
+}
+bool Maze::saveToFile(const std::string& filename, const SolveResult* result) const {
+std::ofstream file(filename.c_str());
+if (!file.is_open()) return false;
+file << render(result, -1, false);
+file.close();
+return !file.fail();
+}
+static bool setupTerminal() {
+#ifdef _WIN32
+HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+if (h == INVALID_HANDLE_VALUE || h == NULL) return false;
+DWORD mode = 0;
+if (!GetConsoleMode(h, &mode)) return false;
+return SetConsoleMode(h, mode | 0x0004) != 0;
+#else
+if (!isatty(STDOUT_FILENO)) return false;
+const char* term = std::getenv("TERM");
+return term != nullptr && std::string(term) != "dumb";
+#endif
+}
+static void sleepMs(int ms) {
+#ifdef _WIN32
+Sleep(static_cast<DWORD>(ms));
+#else
+struct timespec ts;
+ts.tv_sec = ms / 1000;
+ts.tv_nsec = static_cast<long>(ms % 1000) * 1000000L;
+nanosleep(&ts, nullptr);
+#endif
+}
+static bool g_inputClosed = false;
+static int askInt(const std::string& question, int defaultValue, int lo, int hi) {
+while (true) {
+std::cout << question << " [" << defaultValue << "]: ";
+std::string line;
+if (!std::getline(std::cin, line)) {
+g_inputClosed = true;
+return defaultValue;
+}
+std::size_t a = line.find_first_not_of(" \t\r\n");
+if (a == std::string::npos) return defaultValue;
+std::size_t b = line.find_last_not_of(" \t\r\n");
+line = line.substr(a, b - a + 1);
+bool ok = line.size() <= 9;
+for (std::size_t i = 0; i < line.size() && ok; i++)
+if (line[i] < '0' || line[i] > '9') ok = false;
+if (ok) {
+int v = std::stoi(line);
+if (v >= lo && v <= hi) return v;
+}
+std::cout << "  Please enter a whole number from " << lo << " to " << hi << ".\n";
+}
+}
+static unsigned randomSeed() {
+unsigned t = static_cast<unsigned>(std::time(nullptr));
+unsigned c = static_cast<unsigned>(std::clock());
+return (t ^ c) % 999999u + 1u;
+}
+static void printMenu() {
+std::cout << "==== MAZE GENERATOR AND SOLVER (version 3 - final) ====\n"
+<< " 1. Generate a new maze\n"
+<< " 2. Show the maze\n"
+<< " 3. Solve with BFS (shortest route)\n"
+<< " 4. Solve with DFS (dive deep first)\n"
+<< " 5. Add loops (more than one route)\n"
+<< " 6. Compare BFS and DFS\n"
+<< " 7. Save maze to a text file\n"
+<< " 0. Exit\n";
+}
+static void printStats(const SolveResult& res) {
+if (res.found) {
+std::cout << "  Route length   : " << res.path.size() << " cells\n";
+} else {
+std::cout << "  No route found!\n";
+}
+std::cout << "  Cells explored : " << res.explored.size() << "\n\n";
+}
+static void showSolve(const Maze& maze, const SolveResult& res, const std::string& name,
+bool animate, bool color) {
+if (animate) {
+int total = static_cast<int>(res.explored.size());
+int step = total / 60 + 1;
+for (int shown = step; shown < total; shown += step) {
+std::cout << "\033[2J\033[H";
+std::cout << name << " is searching... (" << shown << "/" << total << " cells)\n";
+std::cout << maze.render(&res, shown, color);
+std::cout.flush();
+sleepMs(40);
+}
+std::cout << "\033[2J\033[H";
+}
+std::cout << name << " result\n";
+std::cout << maze.render(&res, -1, color);
+printStats(res);
+}
+static void showCompare(const Maze& maze) {
+SolveResult bfs = maze.solveBFS();
+SolveResult dfs = maze.solveDFS();
+std::cout << "  Algorithm   Route length   Cells explored\n";
+std::cout << "  ---------   ------------   --------------\n";
+std::cout << "  BFS         " << std::setw(12) << bfs.path.size() << "   "
+<< std::setw(14) << bfs.explored.size() << "\n";
+std::cout << "  DFS         " << std::setw(12) << dfs.path.size() << "   "
+<< std::setw(14) << dfs.explored.size() << "\n\n";
+if (dfs.path.size() > bfs.path.size()) {
+std::cout << "  BFS found the SHORTEST route; DFS found a route that is "
+<< (dfs.path.size() - bfs.path.size()) << " cells longer.\n\n";
+} else if (maze.loopCount() == 0) {
+std::cout << "  Same route length: this maze has only one route (no loops), so there\n"
+<< "  is nothing shorter to find. Use option 5 to add loops!\n\n";
+} else {
+std::cout << "  Same route length this time. BFS always finds the shortest route;\n"
+<< "  DFS only found it by luck. Try other mazes or add more loops.\n\n";
+}
+}
+static void showMaze(const Maze& maze, unsigned seed, bool color) {
+std::cout << "Maze " << maze.rows() << " x " << maze.cols() << " (seed " << seed
+<< ", loops added: " << maze.loopCount() << ")\n";
+std::cout << maze.render(nullptr, -1, color);
+std::cout << "  S = start, E = exit, # = wall\n\n";
+}
+int main() {
+const bool ansi = setupTerminal();
+int rows = 10;
+int cols = 20;
+unsigned seed = randomSeed();
+Maze maze(rows, cols);
+maze.generate(seed);
+while (!g_inputClosed) {
+printMenu();
+int choice = askInt("Choose", 2, 0, 7);
+if (g_inputClosed || choice == 0) break;
+std::cout << "\n";
+if (choice == 1) {
+std::cout << "(A maze is 2 x columns + 1 characters wide: up to 39 columns fit in an\n"
+<< " 80-character wide window.)\n";
+int newRows = askInt("Rows    (3-40)", rows, 3, 40);
+int newCols = askInt("Columns (3-80)", cols, 3, 80);
+int seedIn = askInt("Seed (same number = same maze, 0 = random)", 0, 0, 999999);
+if (g_inputClosed) break;
+rows = newRows;
+cols = newCols;
+seed = (seedIn == 0) ? randomSeed() : static_cast<unsigned>(seedIn);
+maze = Maze(rows, cols);
+maze.generate(seed);
+std::cout << "\nNew maze made.\n";
+showMaze(maze, seed, ansi);
+} else if (choice == 2) {
+showMaze(maze, seed, ansi);
+} else if (choice == 3 || choice == 4) {
+bool animate = false;
+if (ansi) animate = (askInt("Animate? (1 = yes, 0 = no)", 1, 0, 1) == 1);
+if (g_inputClosed) break;
+if (choice == 3)
+showSolve(maze, maze.solveBFS(), "BFS", animate, ansi);
+else
+showSolve(maze, maze.solveDFS(), "DFS", animate, ansi);
+} else if (choice == 5) {
+int n = askInt("How many walls to knock down (1-500)", 10, 1, 500);
+if (g_inputClosed) break;
+int removed = maze.addLoops(n);
+if (removed == 0)
+std::cout << "No wall could be removed (the maze is already fully open).\n\n";
+else
+std::cout << "Removed " << removed << " wall(s). The maze now has loops.\n\n";
+showMaze(maze, seed, ansi);
+} else if (choice == 6) {
+showCompare(maze);
+} else if (choice == 7) {
+SolveResult res = maze.solveBFS();
+if (maze.saveToFile("maze_output.txt", &res))
+std::cout << "Saved the maze with the BFS route to maze_output.txt\n\n";
+else
+std::cout << "Could not write maze_output.txt (is the folder write-protected?)\n\n";
+}
+}
+if (g_inputClosed) std::cout << "\n";
+std::cout << "Bye!\n";
+return 0;
+}
+ 
